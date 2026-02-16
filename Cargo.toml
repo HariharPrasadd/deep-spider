@@ -1,7 +1,10 @@
 [package]
-name = "deep-spyder"
+name = "deep-spider"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-spider = "2.45.19"
+hashbrown = "0.16.1"
+spider = { version = "2.45.19", features = ["regex"] }
+url = "2.5.8"
+
