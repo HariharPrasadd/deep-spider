@@ -450,6 +450,7 @@ name = "deep-spider"
 version = "0.1.0"
 dependencies = [
  "hashbrown 0.16.1",
+ "regex",
  "spider",
  "url",
 ]

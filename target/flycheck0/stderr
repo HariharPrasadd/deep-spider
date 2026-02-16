@@ -1,12 +1,52 @@
-   0.470557166s  INFO prepare_target{force=false package_id=deep-spider v0.1.0 (/Users/hariharprasad/MyDocuments/Code/Rust/deep-spyder) target="deep-spider"}: cargo::core::compiler::fingerprint: stale: changed "/Users/hariharprasad/MyDocuments/Code/Rust/deep-spyder/src/main.rs"
-   0.470590791s  INFO prepare_target{force=false package_id=deep-spider v0.1.0 (/Users/hariharprasad/MyDocuments/Code/Rust/deep-spyder) target="deep-spider"}: cargo::core::compiler::fingerprint:           (vs) "/Users/hariharprasad/MyDocuments/Code/Rust/deep-spyder/target/debug/.fingerprint/deep-spider-2808449a0b5f0b2e/dep-bin-deep-spider"
-   0.470593500s  INFO prepare_target{force=false package_id=deep-spider v0.1.0 (/Users/hariharprasad/MyDocuments/Code/Rust/deep-spyder) target="deep-spider"}: cargo::core::compiler::fingerprint:                FileTime { seconds: 1771281283, nanos: 579869190 } < FileTime { seconds: 1771281657, nanos: 271018287 }
-   0.471024791s  INFO prepare_target{force=false package_id=deep-spider v0.1.0 (/Users/hariharprasad/MyDocuments/Code/Rust/deep-spyder) target="deep-spider"}: cargo::core::compiler::fingerprint: fingerprint dirty for deep-spider v0.1.0 (/Users/hariharprasad/MyDocuments/Code/Rust/deep-spyder)/Check { test: false }/TargetInner { name: "deep-spider", doc: true, ..: with_path("/Users/hariharprasad/MyDocuments/Code/Rust/deep-spyder/src/main.rs", Edition2024) }
-   0.471053458s  INFO prepare_target{force=false package_id=deep-spider v0.1.0 (/Users/hariharprasad/MyDocuments/Code/Rust/deep-spyder) target="deep-spider"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleItem(ChangedFile { reference: "/Users/hariharprasad/MyDocuments/Code/Rust/deep-spyder/target/debug/.fingerprint/deep-spider-2808449a0b5f0b2e/dep-bin-deep-spider", reference_mtime: FileTime { seconds: 1771281283, nanos: 579869190 }, stale: "/Users/hariharprasad/MyDocuments/Code/Rust/deep-spyder/src/main.rs", stale_mtime: FileTime { seconds: 1771281657, nanos: 271018287 } }))
-   0.543970250s  INFO prepare_target{force=false package_id=deep-spider v0.1.0 (/Users/hariharprasad/MyDocuments/Code/Rust/deep-spyder) target="deep-spider"}: cargo::core::compiler::fingerprint: stale: changed "/Users/hariharprasad/MyDocuments/Code/Rust/deep-spyder/src/main.rs"
-   0.543977875s  INFO prepare_target{force=false package_id=deep-spider v0.1.0 (/Users/hariharprasad/MyDocuments/Code/Rust/deep-spyder) target="deep-spider"}: cargo::core::compiler::fingerprint:           (vs) "/Users/hariharprasad/MyDocuments/Code/Rust/deep-spyder/target/debug/.fingerprint/deep-spider-8dda58274354cac2/dep-test-bin-deep-spider"
-   0.543979833s  INFO prepare_target{force=false package_id=deep-spider v0.1.0 (/Users/hariharprasad/MyDocuments/Code/Rust/deep-spyder) target="deep-spider"}: cargo::core::compiler::fingerprint:                FileTime { seconds: 1771281283, nanos: 579749481 } < FileTime { seconds: 1771281657, nanos: 271018287 }
-   0.544125291s  INFO prepare_target{force=false package_id=deep-spider v0.1.0 (/Users/hariharprasad/MyDocuments/Code/Rust/deep-spyder) target="deep-spider"}: cargo::core::compiler::fingerprint: fingerprint dirty for deep-spider v0.1.0 (/Users/hariharprasad/MyDocuments/Code/Rust/deep-spyder)/Check { test: true }/TargetInner { name: "deep-spider", doc: true, ..: with_path("/Users/hariharprasad/MyDocuments/Code/Rust/deep-spyder/src/main.rs", Edition2024) }
-   0.544132416s  INFO prepare_target{force=false package_id=deep-spider v0.1.0 (/Users/hariharprasad/MyDocuments/Code/Rust/deep-spyder) target="deep-spider"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleItem(ChangedFile { reference: "/Users/hariharprasad/MyDocuments/Code/Rust/deep-spyder/target/debug/.fingerprint/deep-spider-8dda58274354cac2/dep-test-bin-deep-spider", reference_mtime: FileTime { seconds: 1771281283, nanos: 579749481 }, stale: "/Users/hariharprasad/MyDocuments/Code/Rust/deep-spyder/src/main.rs", stale_mtime: FileTime { seconds: 1771281657, nanos: 271018287 } }))
+   0.191923875s  INFO prepare_target{force=false package_id=deep-spider v0.1.0 (/Users/hariharprasad/MyDocuments/Code/Rust/deep-spyder) target="deep-spider"}: cargo::core::compiler::fingerprint: fingerprint error for deep-spider v0.1.0 (/Users/hariharprasad/MyDocuments/Code/Rust/deep-spyder)/Check { test: false }/TargetInner { name: "deep-spider", doc: true, ..: with_path("/Users/hariharprasad/MyDocuments/Code/Rust/deep-spyder/src/main.rs", Edition2024) }
+   0.192139625s  INFO prepare_target{force=false package_id=deep-spider v0.1.0 (/Users/hariharprasad/MyDocuments/Code/Rust/deep-spyder) target="deep-spider"}: cargo::core::compiler::fingerprint:     err: failed to read `/Users/hariharprasad/MyDocuments/Code/Rust/deep-spyder/target/debug/.fingerprint/deep-spider-6f344d2775fd3aa4/bin-deep-spider`
+
+Caused by:
+    No such file or directory (os error 2)
+
+Stack backtrace:
+   0: std::backtrace::Backtrace::create
+   1: std::backtrace::Backtrace::capture
+   2: cargo_util::paths::read_bytes
+   3: cargo_util::paths::read
+   4: cargo::core::compiler::fingerprint::_compare_old_fingerprint
+   5: cargo::core::compiler::fingerprint::prepare_target
+   6: cargo::core::compiler::compile
+   7: <cargo::core::compiler::build_runner::BuildRunner>::compile
+   8: cargo::ops::cargo_compile::compile_ws
+   9: cargo::ops::cargo_compile::compile_with_exec
+  10: cargo::ops::cargo_compile::compile
+  11: cargo::commands::check::exec
+  12: <cargo::cli::Exec>::exec
+  13: cargo::main
+  14: std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+  15: std::rt::lang_start::<()>::{closure#0}
+  16: std::rt::lang_start_internal
+  17: _main
+   0.255613542s  INFO prepare_target{force=false package_id=deep-spider v0.1.0 (/Users/hariharprasad/MyDocuments/Code/Rust/deep-spyder) target="deep-spider"}: cargo::core::compiler::fingerprint: fingerprint error for deep-spider v0.1.0 (/Users/hariharprasad/MyDocuments/Code/Rust/deep-spyder)/Check { test: true }/TargetInner { name: "deep-spider", doc: true, ..: with_path("/Users/hariharprasad/MyDocuments/Code/Rust/deep-spyder/src/main.rs", Edition2024) }
+   0.255626250s  INFO prepare_target{force=false package_id=deep-spider v0.1.0 (/Users/hariharprasad/MyDocuments/Code/Rust/deep-spyder) target="deep-spider"}: cargo::core::compiler::fingerprint:     err: failed to read `/Users/hariharprasad/MyDocuments/Code/Rust/deep-spyder/target/debug/.fingerprint/deep-spider-0e33a0afed6b3b0d/test-bin-deep-spider`
+
+Caused by:
+    No such file or directory (os error 2)
+
+Stack backtrace:
+   0: std::backtrace::Backtrace::create
+   1: std::backtrace::Backtrace::capture
+   2: cargo_util::paths::read_bytes
+   3: cargo_util::paths::read
+   4: cargo::core::compiler::fingerprint::_compare_old_fingerprint
+   5: cargo::core::compiler::fingerprint::prepare_target
+   6: cargo::core::compiler::compile
+   7: <cargo::core::compiler::build_runner::BuildRunner>::compile
+   8: cargo::ops::cargo_compile::compile_ws
+   9: cargo::ops::cargo_compile::compile_with_exec
+  10: cargo::ops::cargo_compile::compile
+  11: cargo::commands::check::exec
+  12: <cargo::cli::Exec>::exec
+  13: cargo::main
+  14: std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+  15: std::rt::lang_start::<()>::{closure#0}
+  16: std::rt::lang_start_internal
+  17: _main
     Checking deep-spider v0.1.0 (/Users/hariharprasad/MyDocuments/Code/Rust/deep-spyder)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.16s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.40s

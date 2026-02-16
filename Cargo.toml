@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 hashbrown = "0.16.1"
+regex = "1.12.3"
 spider = { version = "2.45.19", features = ["regex"] }
 url = "2.5.8"
 
