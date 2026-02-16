@@ -2,9 +2,26 @@ use spider::configuration::Configuration;
 use spider::compact_str::CompactString;
 use spider::tokio;
 use spider::website::Website;
-use url::Url;
 use std::fs::File;
 use std::io::Write;
+use url::Url;
+
+fn normalize_seed_url(seed_url: &str) -> Result<String, String> {
+    let mut parsed = Url::parse(seed_url)
+        .map_err(|e| format!("Invalid seed URL '{}': {}", seed_url, e))?;
+    let path = parsed.path();
+
+    if !path.ends_with('/') {
+        let normalized_path = if path.is_empty() {
+            "/".to_string()
+        } else {
+            format!("{}/", path)
+        };
+        parsed.set_path(&normalized_path);
+    }
+
+    Ok(parsed.to_string())
+}
 
 fn whitelist_for_url(seed_url: &str) -> Result<Vec<CompactString>, String> {
     let parsed = Url::parse(seed_url)
@@ -36,8 +53,10 @@ fn whitelist_for_url(seed_url: &str) -> Result<Vec<CompactString>, String> {
 
 #[tokio::main]
 async fn main() {
-    let seed_url = "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference";
-    let whitelist = whitelist_for_url(seed_url)
+    let seed_url = "https://numpy.org/doc/2.4/reference";
+    let normalized_seed_url =
+        normalize_seed_url(seed_url).expect("Failed to normalize seed URL");
+    let whitelist = whitelist_for_url(&normalized_seed_url)
         .expect("Failed to build whitelist regex from seed URL");
 
     let mut config = Configuration::new();
@@ -49,7 +68,7 @@ async fn main() {
         .with_user_agent(Some("DocumentationScraper/1.0"))
         .with_whitelist_url(Some(whitelist));
 
-    let mut website = Website::new(seed_url)
+    let mut website = Website::new(&normalized_seed_url)
         .with_config(config)
         .build()
         .expect("Failed to build website");
