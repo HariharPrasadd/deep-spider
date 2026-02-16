@@ -2,7 +2,7 @@ use spider::configuration::Configuration;
 use spider::compact_str::CompactString;
 use spider::tokio;
 use spider::website::Website;
-use std::fs::File;
+use std::fs::OpenOptions;
 use std::io::Write;
 use url::Url;
 
@@ -83,12 +83,17 @@ async fn main() {
         }
     };
 
-    let mut file = File::create("output.txt").expect("Failed to create output.txt.");
-    writeln!(file, "Scraped {} pages", pages.len())
-        .expect("Couldn't write to output file.");
-    for (i, page) in pages.iter().enumerate() {
-        let url = page.get_url();
-        writeln!(file, "{}: {}", i + 1, url)
-            .expect("Couldn't write to output file.");
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("output.txt")
+        .expect("Failed to open output.txt");
+
+    for page in pages.iter() {
+        let html = page.get_html();
+        file.write_all(html.as_bytes())
+            .expect("Couldn't write page HTML to output file.");
+        file.write_all(b"\n")
+            .expect("Couldn't write newline to output file.");
     }
 }
