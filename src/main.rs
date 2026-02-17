@@ -1,3 +1,5 @@
+use regex::Regex;
+use scraper::{Html, Selector};
 use spider::configuration::Configuration;
 use spider::compact_str::CompactString;
 use spider::tokio;
@@ -51,6 +53,45 @@ fn whitelist_for_url(seed_url: &str) -> Result<Vec<CompactString>, String> {
     Ok(vec![CompactString::new(regex_pattern)])
 }
 
+fn extract_content_html(html: &str) -> String {
+    let document = Html::parse_document(html);
+    let selectors = ["main", "article", r#"[role="main"]"#];
+
+    let mut extracted = None;
+    for selector_str in selectors {
+        let selector = match Selector::parse(selector_str) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+        if let Some(node) = document.select(&selector).next() {
+            let selected_html = node.html();
+            if !selected_html.trim().is_empty() {
+                extracted = Some(selected_html);
+                break;
+            }
+        }
+    }
+
+    let mut cleaned = extracted.unwrap_or_else(|| html.to_string());
+    let cleanup_patterns = [
+        r"(?is)<script\b[^>]*>.*?</script>",
+        r"(?is)<style\b[^>]*>.*?</style>",
+        r"(?is)<noscript\b[^>]*>.*?</noscript>",
+        r"(?is)<nav\b[^>]*>.*?</nav>",
+        r"(?is)<header\b[^>]*>.*?</header>",
+        r"(?is)<footer\b[^>]*>.*?</footer>",
+        r"(?is)<aside\b[^>]*>.*?</aside>",
+    ];
+
+    for pattern in cleanup_patterns {
+        if let Ok(re) = Regex::new(pattern) {
+            cleaned = re.replace_all(&cleaned, "").into_owned();
+        }
+    }
+
+    cleaned
+}
+
 #[tokio::main]
 async fn main() {
     let seed_url = "https://numpy.org/doc/2.4/reference";
@@ -91,9 +132,11 @@ async fn main() {
 
     for page in pages.iter() {
         let html = page.get_html();
-        file.write_all(html.as_bytes())
-            .expect("Couldn't write page HTML to output file.");
-        file.write_all(b"\n")
-            .expect("Couldn't write newline to output file.");
+        let extracted_html = extract_content_html(&html);
+        let markdown = html2md::parse_html(&extracted_html);
+        file.write_all(markdown.as_bytes())
+            .expect("Couldn't write page markdown to output file.");
+        file.write_all(b"\n\n")
+            .expect("Couldn't write separator to output file.");
     }
 }
