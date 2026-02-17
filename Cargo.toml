@@ -9,5 +9,6 @@ html2md = "0.2.15"
 regex = "1.12.3"
 scraper = "0.25.0"
 spider = { version = "2.45.19", features = ["regex"] }
+termios = "0.3.3"
 url = "2.5.8"
 

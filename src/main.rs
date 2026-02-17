@@ -5,8 +5,34 @@ use spider::compact_str::CompactString;
 use spider::tokio;
 use spider::website::Website;
 use std::fs::OpenOptions;
-use std::io::Write;
+use std::io::{stdin, stdout, Write};
+use std::os::fd::AsRawFd;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use termios::{tcsetattr, Termios, ECHO, TCSANOW};
 use url::Url;
+
+struct TerminalEchoGuard {
+    fd: i32,
+    original: Termios,
+}
+
+impl TerminalEchoGuard {
+    fn new() -> Option<Self> {
+        let fd = stdin().as_raw_fd();
+        let mut current = Termios::from_fd(fd).ok()?;
+        let original = current.clone();
+        current.c_lflag &= !ECHO;
+        tcsetattr(fd, TCSANOW, &current).ok()?;
+        Some(Self { fd, original })
+    }
+}
+
+impl Drop for TerminalEchoGuard {
+    fn drop(&mut self) {
+        let _ = tcsetattr(self.fd, TCSANOW, &self.original);
+    }
+}
 
 fn normalize_seed_url(seed_url: &str) -> Result<String, String> {
     let mut parsed = Url::parse(seed_url)
@@ -94,7 +120,9 @@ fn extract_content_html(html: &str) -> String {
 
 #[tokio::main]
 async fn main() {
-    let seed_url = "https://numpy.org/doc/2.4/reference";
+    let _echo_guard = TerminalEchoGuard::new();
+
+    let seed_url = "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide";
     let normalized_seed_url =
         normalize_seed_url(seed_url).expect("Failed to normalize seed URL");
     let whitelist = whitelist_for_url(&normalized_seed_url)
@@ -114,12 +142,45 @@ async fn main() {
         .build()
         .expect("Failed to build website");
 
+    let done = Arc::new(AtomicBool::new(false));
+    let stage = Arc::new(Mutex::new(String::from("Downloading")));
+    let done_for_spinner = Arc::clone(&done);
+    let stage_for_spinner = Arc::clone(&stage);
+    let spinner_handle = tokio::spawn(async move {
+        let frames = ["|", "/", "-", "\\"];
+        let mut idx = 0usize;
+        let mut last_len = 0usize;
+        while !done_for_spinner.load(Ordering::Relaxed) {
+            let current_stage = stage_for_spinner
+                .lock()
+                .map(|s| s.clone())
+                .unwrap_or_else(|_| String::from("Working"));
+            let line = format!("{}... {}", current_stage, frames[idx % frames.len()]);
+            let padding = " ".repeat(last_len.saturating_sub(line.len()));
+            print!("\r{}{}", line, padding);
+            let _ = stdout().flush();
+            last_len = line.len();
+            idx += 1;
+            tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        }
+    });
+
+    if let Ok(mut s) = stage.lock() {
+        *s = String::from("Downloading files");
+    }
     website.scrape().await;
 
+    if let Ok(mut s) = stage.lock() {
+        *s = String::from("Converting files");
+    }
     let pages = match website.get_pages() {
         Some(p) => p,
         None => {
-            println!("No pages collected.");
+            done.store(true, Ordering::Relaxed);
+            let _ = spinner_handle.await;
+            print!("\r                    \r");
+            let _ = stdout().flush();
+            println!("Done.");
             return;
         }
     };
@@ -130,6 +191,9 @@ async fn main() {
         .open("output.txt")
         .expect("Failed to open output.txt");
 
+    if let Ok(mut s) = stage.lock() {
+        *s = String::from("Writing files");
+    }
     for page in pages.iter() {
         let html = page.get_html();
         let extracted_html = extract_content_html(&html);
@@ -139,4 +203,13 @@ async fn main() {
         file.write_all(b"\n\n")
             .expect("Couldn't write separator to output file.");
     }
+
+    if let Ok(mut s) = stage.lock() {
+        *s = String::from("Finalizing");
+    }
+    done.store(true, Ordering::Relaxed);
+    let _ = spinner_handle.await;
+    print!("\r                    \r");
+    let _ = stdout().flush();
+    println!("Done!");
 }
