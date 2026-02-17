@@ -122,7 +122,7 @@ fn extract_content_html(html: &str) -> String {
 async fn main() {
     let _echo_guard = TerminalEchoGuard::new();
 
-    let seed_url = "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide";
+    let seed_url = "https://numpy.org/doc/2.4/user";
     let normalized_seed_url =
         normalize_seed_url(seed_url).expect("Failed to normalize seed URL");
     let whitelist = whitelist_for_url(&normalized_seed_url)

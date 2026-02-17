@@ -1,0 +1,7 @@
+https://docs.python.org/3.14/library/
+https://doc.rust-lang.org/std
+https://nextjs.org/docs
+https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide
+https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference
+https://numpy.org/doc/2.4/user
+https://numpy.org/doc/2.4/reference
