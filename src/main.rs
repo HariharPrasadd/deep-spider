@@ -81,32 +81,54 @@ fn whitelist_for_url(seed_url: &str) -> Result<Vec<CompactString>, String> {
 
 fn extract_content_html(html: &str) -> String {
     let document = Html::parse_document(html);
-    let selectors = ["main", "article", r#"[role="main"]"#];
+    let selectors = [
+        "article",
+        "main",
+        r#"[role="main"]"#,
+        ".content",
+        ".docs-content",
+        ".doc-content",
+        ".markdown-body",
+        ".theme-doc-markdown",
+        "#content",
+        "#main-content",
+        "body",
+    ];
 
-    let mut extracted = None;
+    let mut best_html: Option<String> = None;
+    let mut best_text_len = 0usize;
+
     for selector_str in selectors {
         let selector = match Selector::parse(selector_str) {
             Ok(s) => s,
             Err(_) => continue,
         };
-        if let Some(node) = document.select(&selector).next() {
-            let selected_html = node.html();
-            if !selected_html.trim().is_empty() {
-                extracted = Some(selected_html);
-                break;
+        for node in document.select(&selector) {
+            let text_len = node.text().collect::<String>().trim().len();
+            if text_len > best_text_len {
+                let selected_html = node.html();
+                if !selected_html.trim().is_empty() {
+                    best_text_len = text_len;
+                    best_html = Some(selected_html);
+                }
             }
         }
     }
 
-    let mut cleaned = extracted.unwrap_or_else(|| html.to_string());
+    let mut cleaned = best_html.unwrap_or_else(|| html.to_string());
     let cleanup_patterns = [
+        r"(?is)<!--.*?-->",
         r"(?is)<script\b[^>]*>.*?</script>",
         r"(?is)<style\b[^>]*>.*?</style>",
         r"(?is)<noscript\b[^>]*>.*?</noscript>",
+        r"(?is)<template\b[^>]*>.*?</template>",
         r"(?is)<nav\b[^>]*>.*?</nav>",
         r"(?is)<header\b[^>]*>.*?</header>",
         r"(?is)<footer\b[^>]*>.*?</footer>",
         r"(?is)<aside\b[^>]*>.*?</aside>",
+        r#"(?is)<(div|section)[^>]*(id|class)\s*=\s*["'][^"']*(nav|menu|sidebar|footer|header|toc|breadcrumb|pagination|cookie|consent|search|feedback|promo|banner|advert|ads|social|share)[^"']*["'][^>]*>.*?</\1>"#,
+        r"(?is)<button\b[^>]*>.*?</button>",
+        r"(?is)<form\b[^>]*>.*?</form>",
     ];
 
     for pattern in cleanup_patterns {
@@ -118,11 +140,35 @@ fn extract_content_html(html: &str) -> String {
     cleaned
 }
 
+fn cleanup_markdown(markdown: &str) -> String {
+    let mut cleaned = markdown.to_string();
+    let line_patterns = [
+        r"(?im)^\s*was this helpful\?\s*$",
+        r"(?im)^\s*copy page\s*$",
+        r"(?im)^\s*menu\s*$",
+        r"(?im)^\s*send\s*$",
+        r"(?im)^\s*latest version\s*$",
+        r"(?im)^\s*supported\.\s*$",
+    ];
+
+    for pattern in line_patterns {
+        if let Ok(re) = Regex::new(pattern) {
+            cleaned = re.replace_all(&cleaned, "").into_owned();
+        }
+    }
+
+    if let Ok(re) = Regex::new(r"\n{3,}") {
+        cleaned = re.replace_all(&cleaned, "\n\n").into_owned();
+    }
+
+    cleaned.trim().to_string()
+}
+
 #[tokio::main]
 async fn main() {
     let _echo_guard = TerminalEchoGuard::new();
 
-    let seed_url = "https://numpy.org/doc/2.4/user";
+    let seed_url = "https://nextjs.org/docs";
     let normalized_seed_url =
         normalize_seed_url(seed_url).expect("Failed to normalize seed URL");
     let whitelist = whitelist_for_url(&normalized_seed_url)
@@ -197,7 +243,7 @@ async fn main() {
     for page in pages.iter() {
         let html = page.get_html();
         let extracted_html = extract_content_html(&html);
-        let markdown = html2md::parse_html(&extracted_html);
+        let markdown = cleanup_markdown(&html2md::parse_html(&extracted_html));
         file.write_all(markdown.as_bytes())
             .expect("Couldn't write page markdown to output file.");
         file.write_all(b"\n\n")
