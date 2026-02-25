@@ -231,6 +231,20 @@ async fn run() -> Result<(), Box<dyn Error>> {
             refresh_library(&conn, &args[1], include_artifacts).await?;
             println!("Done.");
         }
+        "merge" => {
+            if args.len() < 4 {
+                return Err("Usage: plshelp merge <new_library_name> <library1> <library2> [library3 ...] [--replace] [--include-artifacts[=/path]]".into());
+            }
+            let (members, replace, include_artifacts) = parse_merge_args(&args[2..], &args[1])?;
+            merge_libraries(
+                &conn,
+                &args[1],
+                &members,
+                replace,
+                include_artifacts.as_deref(),
+            )?;
+            println!("Done.");
+        }
         "export" => {
             if args.len() < 2 {
                 return Err("Usage: plshelp export <library_name> [path]".into());
@@ -326,6 +340,9 @@ fn print_help() {
     println!("  crawl <library_name> <source_url> [--include-artifacts[=/path]]");
     println!("  index <library_name> [--file /path/to/file]");
     println!("  refresh <library_name> [--include-artifacts[=/path]]");
+    println!(
+        "  merge <new_library_name> <library1> <library2> [library3 ...] [--replace] [--include-artifacts[=/path]]"
+    );
     println!("  export <library_name> [path]");
     println!(
         "  query <library_name> \"<question>\" [--mode hybrid|vector|keyword] [--top-k N] [--context N]"
@@ -378,7 +395,8 @@ fn init_db(db_path: &Path) -> Result<Connection, Box<dyn Error>> {
             source_url TEXT NOT NULL,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
-            last_refreshed_at TEXT NOT NULL
+            last_refreshed_at TEXT NOT NULL,
+            content_size_chars INTEGER NOT NULL DEFAULT 0
         );
         CREATE TABLE IF NOT EXISTS library_aliases (
             alias TEXT PRIMARY KEY,
@@ -403,8 +421,15 @@ fn init_db(db_path: &Path) -> Result<Connection, Box<dyn Error>> {
             page_order INTEGER NOT NULL,
             source_url TEXT NOT NULL,
             content TEXT NOT NULL,
-            content_size_bytes INTEGER NOT NULL,
+            content_size_chars INTEGER NOT NULL,
             crawled_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS library_groups (
+            group_name TEXT NOT NULL,
+            member_library_name TEXT NOT NULL,
+            member_order INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (group_name, member_library_name)
         );
         CREATE TABLE IF NOT EXISTS jobs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -424,9 +449,50 @@ fn init_db(db_path: &Path) -> Result<Connection, Box<dyn Error>> {
         CREATE INDEX IF NOT EXISTS idx_chunks_library_page ON chunks(library_name, source_url, chunk_index_in_page);
         CREATE INDEX IF NOT EXISTS idx_pages_library_name ON pages(library_name);
         CREATE INDEX IF NOT EXISTS idx_pages_library_order ON pages(library_name, page_order);
+        CREATE INDEX IF NOT EXISTS idx_library_groups_name ON library_groups(group_name);
         ",
     )?;
+    run_db_migrations(&conn)?;
     Ok(conn)
+}
+
+fn run_db_migrations(conn: &Connection) -> Result<(), Box<dyn Error>> {
+    let mut has_page_size_bytes = false;
+    let mut has_page_size_chars = false;
+    let mut has_library_size_chars = false;
+
+    let mut stmt = conn.prepare("PRAGMA table_info(pages)")?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
+    for row in rows {
+        let col = row?;
+        if col == "content_size_bytes" {
+            has_page_size_bytes = true;
+        }
+        if col == "content_size_chars" {
+            has_page_size_chars = true;
+        }
+    }
+    if has_page_size_bytes && !has_page_size_chars {
+        conn.execute_batch(
+            "ALTER TABLE pages RENAME COLUMN content_size_bytes TO content_size_chars;",
+        )?;
+    }
+
+    let mut stmt = conn.prepare("PRAGMA table_info(libraries)")?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
+    for row in rows {
+        if row? == "content_size_chars" {
+            has_library_size_chars = true;
+            break;
+        }
+    }
+    if !has_library_size_chars {
+        conn.execute_batch(
+            "ALTER TABLE libraries ADD COLUMN content_size_chars INTEGER NOT NULL DEFAULT 0;",
+        )?;
+    }
+
+    Ok(())
 }
 
 fn start_job(conn: &Connection, library_name: &str, job_type: &str) -> Result<i64, Box<dyn Error>> {
@@ -552,6 +618,49 @@ fn parse_include_artifacts_flag(flags: &[String], library_name: &str) -> Option<
     artifacts
 }
 
+fn parse_merge_args(
+    args: &[String],
+    group_name: &str,
+) -> Result<(Vec<String>, bool, Option<PathBuf>), Box<dyn Error>> {
+    let mut members = Vec::new();
+    let mut replace = false;
+    let mut include_artifacts: Option<PathBuf> = None;
+    let mut i = 0usize;
+    while i < args.len() {
+        let token = &args[i];
+        if token == "--replace" {
+            replace = true;
+            i += 1;
+            continue;
+        }
+        if token == "--include-artifacts" {
+            if i + 1 < args.len() && !args[i + 1].starts_with("--") {
+                include_artifacts = Some(PathBuf::from(args[i + 1].clone()));
+                i += 2;
+            } else {
+                include_artifacts = Some(compiled_dir(group_name));
+                i += 1;
+            }
+            continue;
+        }
+        if let Some(raw_path) = token.strip_prefix("--include-artifacts=") {
+            include_artifacts = if raw_path.is_empty() {
+                Some(compiled_dir(group_name))
+            } else {
+                Some(PathBuf::from(raw_path))
+            };
+            i += 1;
+            continue;
+        }
+        members.push(token.clone());
+        i += 1;
+    }
+    if members.len() < 2 {
+        return Err("merge requires at least two source libraries.".into());
+    }
+    Ok((members, replace, include_artifacts))
+}
+
 fn write_artifacts(output_dir: &Path, content: &str) -> Result<(), Box<dyn Error>> {
     fs::create_dir_all(output_dir)?;
     fs::write(output_dir.join("docs.txt"), content)?;
@@ -564,42 +673,18 @@ fn export_library(
     input_name: &str,
     output_dir: Option<&Path>,
 ) -> Result<(), Box<dyn Error>> {
-    let library_name = resolve_library_name(conn, input_name)?;
+    let members = resolve_target_libraries(conn, input_name)?;
     let output_dir = output_dir
         .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| compiled_dir(&library_name));
-    let mut stmt = conn.prepare(
-        "SELECT content
-         FROM pages
-         WHERE library_name = ?1
-         ORDER BY page_order ASC",
-    )?;
-    let rows = stmt.query_map(params![library_name], |row| row.get::<_, String>(0))?;
-    let mut page_contents = Vec::new();
-    for row in rows {
-        page_contents.push(row?);
+        .unwrap_or_else(|| compiled_dir(input_name));
+    let mut compiled_parts = Vec::new();
+    for member in &members {
+        compiled_parts.push(compiled_text_for_library(conn, member)?);
     }
-
-    let compiled = if !page_contents.is_empty() {
-        let mut text = page_contents.join("\n\n");
-        if !text.is_empty() {
-            text.push_str("\n\n");
-        }
-        text
-    } else {
-        conn.query_row(
-            "SELECT content FROM library_texts WHERE library_name = ?1",
-            params![library_name],
-            |row| row.get::<_, String>(0),
-        )
-        .optional()?
-        .ok_or_else(|| {
-            format!(
-                "No crawled content found for '{}'. Run crawl/add first.",
-                library_name
-            )
-        })?
-    };
+    let mut compiled = compiled_parts.join("\n\n");
+    if !compiled.is_empty() {
+        compiled.push_str("\n\n");
+    }
 
     write_artifacts(&output_dir, &compiled)?;
     Ok(())
@@ -619,6 +704,140 @@ fn resolve_library_name(conn: &Connection, input: &str) -> Result<String, Box<dy
         |row| row.get::<_, String>(0),
     )?;
     Ok(name)
+}
+
+fn group_members(conn: &Connection, group_name: &str) -> Result<Vec<String>, Box<dyn Error>> {
+    let mut stmt = conn.prepare(
+        "SELECT member_library_name
+         FROM library_groups
+         WHERE group_name = ?1
+         ORDER BY member_order ASC",
+    )?;
+    let rows = stmt.query_map(params![group_name], |row| row.get::<_, String>(0))?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
+}
+
+fn resolve_target_libraries(conn: &Connection, input: &str) -> Result<Vec<String>, Box<dyn Error>> {
+    if let Ok(name) = resolve_library_name(conn, input) {
+        return Ok(vec![name]);
+    }
+    let members = group_members(conn, input)?;
+    if members.is_empty() {
+        return Err(format!("Unknown library or merged group '{}'.", input).into());
+    }
+    Ok(members)
+}
+
+fn compiled_text_for_library(
+    conn: &Connection,
+    input_name: &str,
+) -> Result<String, Box<dyn Error>> {
+    let library_name = resolve_library_name(conn, input_name)?;
+    let mut stmt = conn.prepare(
+        "SELECT content
+         FROM pages
+         WHERE library_name = ?1
+         ORDER BY page_order ASC",
+    )?;
+    let rows = stmt.query_map(params![library_name], |row| row.get::<_, String>(0))?;
+    let mut page_contents = Vec::new();
+    for row in rows {
+        page_contents.push(row?);
+    }
+    if !page_contents.is_empty() {
+        let mut text = page_contents.join("\n\n");
+        if !text.is_empty() {
+            text.push_str("\n\n");
+        }
+        return Ok(text);
+    }
+    let fallback: Option<String> = conn
+        .query_row(
+            "SELECT content FROM library_texts WHERE library_name = ?1",
+            params![library_name],
+            |row| row.get(0),
+        )
+        .optional()?;
+    fallback.ok_or_else(|| {
+        format!(
+            "No crawled content found for '{}'. Run crawl/add first.",
+            input_name
+        )
+        .into()
+    })
+}
+
+fn merge_libraries(
+    conn: &Connection,
+    group_name: &str,
+    member_inputs: &[String],
+    replace: bool,
+    include_artifacts: Option<&Path>,
+) -> Result<(), Box<dyn Error>> {
+    if resolve_library_name(conn, group_name).is_ok() {
+        return Err(format!("'{}' already exists as a library/alias.", group_name).into());
+    }
+
+    let mut resolved_members = Vec::new();
+    let mut seen = HashSet::new();
+    for input in member_inputs {
+        for name in resolve_target_libraries(conn, input)? {
+            if seen.insert(name.clone()) {
+                resolved_members.push(name);
+            }
+        }
+    }
+    if resolved_members.len() < 2 {
+        return Err("Merged group must contain at least two distinct libraries.".into());
+    }
+
+    let exists: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM library_groups WHERE group_name = ?1",
+        params![group_name],
+        |row| row.get(0),
+    )?;
+    if exists > 0 && !replace {
+        return Err(format!(
+            "Merged group '{}' already exists. Use --replace to overwrite membership.",
+            group_name
+        )
+        .into());
+    }
+
+    let tx = conn.unchecked_transaction()?;
+    if exists > 0 {
+        tx.execute(
+            "DELETE FROM library_groups WHERE group_name = ?1",
+            params![group_name],
+        )?;
+    }
+    let now = now_epoch();
+    for (idx, member) in resolved_members.iter().enumerate() {
+        tx.execute(
+            "INSERT INTO library_groups (group_name, member_library_name, member_order, created_at)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![group_name, member, idx as i64, now],
+        )?;
+    }
+    tx.commit()?;
+
+    if let Some(path) = include_artifacts {
+        let mut compiled_parts = Vec::new();
+        for member in &resolved_members {
+            compiled_parts.push(compiled_text_for_library(conn, member)?);
+        }
+        let mut compiled = compiled_parts.join("\n\n");
+        if !compiled.is_empty() {
+            compiled.push_str("\n\n");
+        }
+        write_artifacts(path, &compiled)?;
+    }
+
+    Ok(())
 }
 
 async fn add_library(
@@ -843,7 +1062,9 @@ async fn crawl_library(
             })
             .collect();
         let mut compiled_parts = Vec::with_capacity(converted.len());
+        let mut total_chars = 0i64;
         for (_, markdown) in &converted {
+            total_chars += markdown.chars().count() as i64;
             compiled_parts.push(markdown.clone());
         }
         let mut compiled = compiled_parts.join("\n\n");
@@ -864,12 +1085,18 @@ async fn crawl_library(
         let tx = conn.unchecked_transaction()?;
         tx.execute("DELETE FROM pages WHERE library_name = ?1", params![library_name])?;
         for (page_order, (url, markdown)) in converted.iter().enumerate() {
-            let content_size = markdown.len() as i64;
             tx.execute(
                 "INSERT INTO pages (
-                    library_name, page_order, source_url, content, content_size_bytes, crawled_at
+                    library_name, page_order, source_url, content, content_size_chars, crawled_at
                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![library_name, page_order as i64, url, markdown, content_size, now],
+                params![
+                    library_name,
+                    page_order as i64,
+                    url,
+                    markdown,
+                    markdown.chars().count() as i64,
+                    now
+                ],
             )?;
         }
         tx.commit()?;
@@ -883,13 +1110,13 @@ async fn crawl_library(
         let _ = stdout().flush();
 
         conn.execute(
-            "INSERT OR REPLACE INTO libraries (library_name, source_url, created_at, updated_at, last_refreshed_at)
+            "INSERT OR REPLACE INTO libraries (library_name, source_url, created_at, updated_at, last_refreshed_at, content_size_chars)
              VALUES (
                ?1, ?2,
                COALESCE((SELECT created_at FROM libraries WHERE library_name = ?1), ?3),
-               ?3, ?3
+               ?3, ?3, ?4
              )",
-            params![library_name, source_url, now],
+            params![library_name, source_url, now, total_chars],
         )?;
 
         Ok::<String, Box<dyn Error>>(format!("Crawled {} pages.", pages.len()))
@@ -1081,20 +1308,29 @@ fn index_library(
             for (page_order, page_url, content) in &page_inputs {
                 tx.execute(
                     "INSERT INTO pages (
-                        library_name, page_order, source_url, content, content_size_bytes, crawled_at
+                        library_name, page_order, source_url, content, content_size_chars, crawled_at
                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                     params![
                         library_name,
                         page_order,
                         page_url,
                         content,
-                        content.len() as i64,
+                        content.chars().count() as i64,
                         now
                     ],
                 )?;
             }
             tx.commit()?;
         }
+
+        let total_chars: i64 = page_inputs
+            .iter()
+            .map(|(_, _, content)| content.chars().count() as i64)
+            .sum();
+        conn.execute(
+            "UPDATE libraries SET content_size_chars = ?1, updated_at = ?2 WHERE library_name = ?3",
+            params![total_chars, now_epoch(), library_name],
+        )?;
 
         let mut chunks = Vec::new();
         let mut chunk_meta: Vec<(i64, String, i64)> = Vec::new();
@@ -1295,10 +1531,13 @@ fn query_library(
     context: usize,
     trace: bool,
 ) -> Result<(), Box<dyn Error>> {
-    let library_name = resolve_library_name(conn, input_name)?;
-    let chunks = load_chunks_for_library(conn, &library_name)?;
+    let target_libraries = resolve_target_libraries(conn, input_name)?;
+    let mut chunks = Vec::new();
+    for library_name in &target_libraries {
+        chunks.extend(load_chunks_for_library(conn, library_name)?);
+    }
     if chunks.is_empty() {
-        println!("No chunks indexed for '{}'.", library_name);
+        println!("No chunks indexed for '{}'.", input_name);
         return Ok(());
     }
     let query_embedding = embed_query(mode, question)?;
@@ -1307,6 +1546,9 @@ fn query_library(
 
     for (rank, hit) in scored.iter().enumerate() {
         println!("{}. [{}] {}", rank + 1, hit.chunk.id, hit.chunk.source_url);
+        if target_libraries.len() > 1 {
+            println!("   library: {}", hit.chunk.library_name);
+        }
         if trace {
             println!(
                 "   scores: final={:.4} vector={:.4} keyword={:.4}",
@@ -1324,7 +1566,7 @@ fn query_library(
         if context > 0 {
             let around = neighbors(
                 conn,
-                &library_name,
+                &hit.chunk.library_name,
                 &hit.chunk.source_url,
                 hit.chunk.chunk_index_in_page,
                 context,
@@ -1351,8 +1593,13 @@ fn ask_libraries(
     let (mode, top_k, context, filter) = ask_flags(flags)?;
     let libraries = if let Some(libs) = filter {
         let mut out = Vec::new();
+        let mut seen = HashSet::new();
         for lib in libs {
-            out.push(resolve_library_name(conn, &lib)?);
+            for expanded in resolve_target_libraries(conn, &lib)? {
+                if seen.insert(expanded.clone()) {
+                    out.push(expanded);
+                }
+            }
         }
         out
     } else {
@@ -1557,6 +1804,53 @@ fn page_and_chunk_stats(
     ))
 }
 
+fn aggregate_stats_for_libraries(
+    conn: &Connection,
+    libraries: &[String],
+) -> Result<(i64, i64, f64, i64, i64, i64), Box<dyn Error>> {
+    if libraries.is_empty() {
+        return Ok((0, 0, 0.0, 0, 0, 0));
+    }
+    let mut total_pages = 0i64;
+    let mut total_chunks = 0i64;
+    let mut total_empty_pages = 0i64;
+    let mut global_min = i64::MAX;
+    let mut global_max = i64::MIN;
+    let mut saw_min_max = false;
+    for lib in libraries {
+        let (pages, chunks, _avg, min, max, empty_pages) = page_and_chunk_stats(conn, lib)?;
+        total_pages += pages;
+        total_chunks += chunks;
+        total_empty_pages += empty_pages;
+        if pages > 0 {
+            if !saw_min_max || min < global_min {
+                global_min = min;
+            }
+            if !saw_min_max || max > global_max {
+                global_max = max;
+            }
+            saw_min_max = true;
+        }
+    }
+    if !saw_min_max {
+        global_min = 0;
+        global_max = 0;
+    }
+    let avg = if total_pages > 0 {
+        total_chunks as f64 / total_pages as f64
+    } else {
+        0.0
+    };
+    Ok((
+        total_pages,
+        total_chunks,
+        avg,
+        global_min,
+        global_max,
+        total_empty_pages,
+    ))
+}
+
 fn list_libraries(conn: &Connection) -> Result<(), Box<dyn Error>> {
     let mut stmt = conn.prepare(
         "SELECT library_name, source_url, last_refreshed_at FROM libraries ORDER BY library_name ASC",
@@ -1579,73 +1873,135 @@ fn list_libraries(conn: &Connection) -> Result<(), Box<dyn Error>> {
         println!("  status: {status}");
         println!("  last refreshed: {}", human_time(&refreshed));
     }
+    let mut group_stmt =
+        conn.prepare("SELECT DISTINCT group_name FROM library_groups ORDER BY group_name ASC")?;
+    let group_rows = group_stmt.query_map([], |row| row.get::<_, String>(0))?;
+    for row in group_rows {
+        let group_name = row?;
+        let members = group_members(conn, &group_name)?;
+        let (pages, chunks, _, _, _, _) = aggregate_stats_for_libraries(conn, &members)?;
+        println!("{group_name}");
+        println!("  source: merged group");
+        println!("  pages: {pages}");
+        println!("  chunks: {chunks}");
+        println!("  status: merged");
+        println!("  last refreshed: n/a");
+    }
     Ok(())
 }
 
 fn show_library(conn: &Connection, input_name: &str) -> Result<(), Box<dyn Error>> {
-    let library_name = resolve_library_name(conn, input_name)?;
-    let (source_url, refreshed): (String, String) = conn.query_row(
-        "SELECT source_url, last_refreshed_at FROM libraries WHERE library_name = ?1",
-        params![library_name],
-        |row| Ok((row.get(0)?, row.get(1)?)),
-    )?;
-    let (pages, chunks, avg_chunks, min_chunks, max_chunks, empty_pages) =
-        page_and_chunk_stats(conn, &library_name)?;
-    let content_size_bytes: i64 = conn.query_row(
-        "SELECT COALESCE(SUM(content_size_bytes), 0) FROM pages WHERE library_name = ?1",
-        params![library_name],
-        |row| row.get(0),
-    )?;
-    let latest_status = library_status(conn, &library_name)?;
-    let last_crawled_at = latest_success_time_by_kind(conn, &library_name, "crawl")?;
-    let last_indexed_at = latest_success_time_by_kind(conn, &library_name, "index")?;
-    let latest_error = latest_failed_message(conn, &library_name)?;
+    if let Ok(library_name) = resolve_library_name(conn, input_name) {
+        let (source_url, refreshed): (String, String) = conn.query_row(
+            "SELECT source_url, last_refreshed_at FROM libraries WHERE library_name = ?1",
+            params![library_name],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        let (pages, chunks, avg_chunks, min_chunks, max_chunks, empty_pages) =
+            page_and_chunk_stats(conn, &library_name)?;
+        let content_size_chars: i64 = conn.query_row(
+            "SELECT COALESCE(content_size_chars, 0) FROM libraries WHERE library_name = ?1",
+            params![library_name],
+            |row| row.get(0),
+        )?;
+        let latest_status = library_status(conn, &library_name)?;
+        let last_crawled_at = latest_success_time_by_kind(conn, &library_name, "crawl")?;
+        let last_indexed_at = latest_success_time_by_kind(conn, &library_name, "index")?;
+        let latest_error = latest_failed_message(conn, &library_name)?;
 
-    println!("library_name: {library_name}");
-    println!("source_url: {source_url}");
+        println!("library_name: {library_name}");
+        println!("source_url: {source_url}");
+        println!("page_count: {pages}");
+        println!("chunk_count: {chunks}");
+        println!("avg_chunks_per_page: {:.2}", avg_chunks);
+        println!("min_chunks_per_page: {min_chunks}");
+        println!("max_chunks_per_page: {max_chunks}");
+        println!("pages_with_no_chunks: {empty_pages}");
+        println!("content_size_chars: {content_size_chars}");
+        println!("indexed_model: {:?}", DEFAULT_EMBEDDING_MODEL);
+        println!("embedding_dim: 1024");
+        println!("latest_job_status: {latest_status}");
+        println!(
+            "last_crawled_at: {}",
+            last_crawled_at
+                .as_deref()
+                .map(human_time)
+                .unwrap_or_else(|| "n/a".to_string())
+        );
+        println!(
+            "last_indexed_at: {}",
+            last_indexed_at
+                .as_deref()
+                .map(human_time)
+                .unwrap_or_else(|| "n/a".to_string())
+        );
+        if let Some(err) = latest_error {
+            println!("latest_error: {err}");
+        }
+        println!("last_refreshed_at: {}", human_time(&refreshed));
+        let mut alias_stmt = conn.prepare(
+            "SELECT alias FROM library_aliases WHERE library_name = ?1 ORDER BY alias ASC",
+        )?;
+        let alias_rows =
+            alias_stmt.query_map(params![library_name], |row| row.get::<_, String>(0))?;
+        let mut aliases = Vec::new();
+        for row in alias_rows {
+            aliases.push(row?);
+        }
+        if !aliases.is_empty() {
+            println!("aliases: {}", aliases.join(", "));
+        }
+        return Ok(());
+    }
+
+    let members = group_members(conn, input_name)?;
+    if members.is_empty() {
+        return Err(format!("Unknown library or merged group '{}'.", input_name).into());
+    }
+    let (pages, chunks, avg_chunks, min_chunks, max_chunks, empty_pages) =
+        aggregate_stats_for_libraries(conn, &members)?;
+    let mut content_size_chars = 0i64;
+    for member in &members {
+        let size: i64 = conn.query_row(
+            "SELECT COALESCE(content_size_chars, 0) FROM libraries WHERE library_name = ?1",
+            params![member],
+            |row| row.get(0),
+        )?;
+        content_size_chars += size;
+    }
+    println!("library_name: {input_name}");
+    println!("source_url: merged group");
     println!("page_count: {pages}");
     println!("chunk_count: {chunks}");
     println!("avg_chunks_per_page: {:.2}", avg_chunks);
     println!("min_chunks_per_page: {min_chunks}");
     println!("max_chunks_per_page: {max_chunks}");
-    println!("empty_pages: {empty_pages}");
-    println!("content_size_bytes: {content_size_bytes}");
+    println!("pages_with_no_chunks: {empty_pages}");
+    println!("content_size_chars: {content_size_chars}");
     println!("indexed_model: {:?}", DEFAULT_EMBEDDING_MODEL);
     println!("embedding_dim: 1024");
-    println!("latest_job_status: {latest_status}");
-    println!(
-        "last_crawled_at: {}",
-        last_crawled_at
-            .as_deref()
-            .map(human_time)
-            .unwrap_or_else(|| "n/a".to_string())
-    );
-    println!(
-        "last_indexed_at: {}",
-        last_indexed_at
-            .as_deref()
-            .map(human_time)
-            .unwrap_or_else(|| "n/a".to_string())
-    );
-    if let Some(err) = latest_error {
-        println!("latest_error: {err}");
-    }
-    println!("last_refreshed_at: {}", human_time(&refreshed));
-    let mut alias_stmt = conn
-        .prepare("SELECT alias FROM library_aliases WHERE library_name = ?1 ORDER BY alias ASC")?;
-    let alias_rows = alias_stmt.query_map(params![library_name], |row| row.get::<_, String>(0))?;
-    let mut aliases = Vec::new();
-    for row in alias_rows {
-        aliases.push(row?);
-    }
-    if !aliases.is_empty() {
-        println!("aliases: {}", aliases.join(", "));
-    }
+    println!("latest_job_status: merged");
+    println!("last_crawled_at: n/a");
+    println!("last_indexed_at: n/a");
+    println!("last_refreshed_at: n/a");
+    println!("members: {}", members.join(", "));
     Ok(())
 }
 
 fn remove_library(conn: &Connection, input_name: &str) -> Result<(), Box<dyn Error>> {
-    let library_name = resolve_library_name(conn, input_name)?;
+    let library_name = match resolve_library_name(conn, input_name) {
+        Ok(name) => name,
+        Err(_) => {
+            let deleted = conn.execute(
+                "DELETE FROM library_groups WHERE group_name = ?1",
+                params![input_name],
+            )?;
+            if deleted > 0 {
+                return Ok(());
+            }
+            return Err(format!("Unknown library or merged group '{}'.", input_name).into());
+        }
+    };
     conn.execute(
         "DELETE FROM library_aliases WHERE library_name = ?1",
         params![library_name],
