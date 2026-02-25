@@ -83,6 +83,11 @@ static MARKDOWN_LINE_REGEXES: LazyLock<Vec<Regex>> = LazyLock::new(|| {
 
 static MULTI_NEWLINE_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\n{3,}").expect("valid regex"));
+static MD_ATX_HEADING_RE: LazyLock<Regex> = LazyLock::new(|| {
+    // CommonMark-style ATX headings:
+    // up to 3 leading spaces, 1-6 hashes, then at least one space/tab.
+    Regex::new(r"^[ ]{0,3}#{1,6}[ \t]+.*$").expect("valid regex")
+});
 
 static HTML_REGEX_HINTS: &[&str] = &[
     "<!--",
@@ -1492,17 +1497,114 @@ fn preprocess_for_chunking(input: &str) -> String {
 }
 
 const CHUNK_MIN_CHARS: usize = 600;
+const CHUNK_MAX_CHARS: usize = 3000;
+
+fn split_by_paragraph_upper_bound(chunks: Vec<String>) -> Vec<String> {
+    let mut out = Vec::new();
+    for chunk in chunks {
+        if chunk.chars().count() <= CHUNK_MAX_CHARS {
+            out.push(chunk);
+            continue;
+        }
+
+        // Split paragraphs only outside fenced code blocks.
+        let mut paragraphs: Vec<String> = Vec::new();
+        let mut current_para = String::new();
+        let mut in_fence = false;
+        for line in chunk.split_inclusive('\n') {
+            let line_no_nl = line.trim_end_matches('\n').trim_end_matches('\r');
+            let starts_fence = line_no_nl.trim_start().starts_with("```");
+            current_para.push_str(line);
+            if starts_fence {
+                in_fence = !in_fence;
+            }
+            if !in_fence && line_no_nl.trim().is_empty() {
+                if !current_para.trim().is_empty() {
+                    paragraphs.push(std::mem::take(&mut current_para));
+                } else {
+                    current_para.clear();
+                }
+            }
+        }
+        if !current_para.trim().is_empty() {
+            paragraphs.push(current_para);
+        }
+
+        let mut current = String::new();
+        for para in paragraphs {
+            let para = para.trim();
+            if para.is_empty() {
+                continue;
+            }
+            if current.is_empty() {
+                current.push_str(para);
+                continue;
+            }
+            let candidate = format!("{current}\n\n{para}");
+            if candidate.chars().count() <= CHUNK_MAX_CHARS {
+                current = candidate;
+            } else {
+                out.push(current);
+                current = para.to_string();
+            }
+        }
+        if !current.is_empty() {
+            out.push(current);
+        }
+    }
+    out
+}
+
+fn split_by_newline_upper_bound(chunks: Vec<String>) -> Vec<String> {
+    let mut out = Vec::new();
+    for chunk in chunks {
+        if chunk.chars().count() <= CHUNK_MAX_CHARS {
+            out.push(chunk);
+            continue;
+        }
+
+        let mut current = String::new();
+        let mut in_fence = false;
+        for line in chunk.split_inclusive('\n') {
+            let line_no_nl = line.trim_end_matches('\n').trim_end_matches('\r');
+            let starts_fence = line_no_nl.trim_start().starts_with("```");
+
+            if !in_fence {
+                let candidate_len = current.chars().count() + line.chars().count();
+                if !current.is_empty() && candidate_len > CHUNK_MAX_CHARS {
+                    out.push(std::mem::take(&mut current));
+                }
+            }
+
+            current.push_str(line);
+            if starts_fence {
+                in_fence = !in_fence;
+            }
+        }
+
+        if !current.is_empty() {
+            out.push(current);
+        }
+    }
+    out
+}
 
 fn chunk_markdown_page(content: &str) -> Vec<String> {
     let processed = preprocess_for_chunking(content);
     let mut out = Vec::new();
     let mut current = String::new();
+    let mut in_fence = false;
     for line in processed.split_inclusive('\n') {
-        let is_heading = line.trim_start().starts_with('#');
+        let line_no_nl = line.trim_end_matches('\n').trim_end_matches('\r');
+        let starts_fence = line_no_nl.trim_start().starts_with("```");
+        let is_heading = !in_fence && MD_ATX_HEADING_RE.is_match(line_no_nl);
         if is_heading && !current.trim().is_empty() {
             out.push(std::mem::take(&mut current));
         }
         current.push_str(line);
+        if starts_fence {
+            in_fence = !in_fence;
+        }
     }
     if !current.trim().is_empty() {
         out.push(current);
@@ -1516,6 +1618,8 @@ fn chunk_markdown_page(content: &str) -> Vec<String> {
             cleaned.push(t);
         }
     }
+    cleaned = split_by_paragraph_upper_bound(cleaned);
+    cleaned = split_by_newline_upper_bound(cleaned);
 
     // Lower-bound only top-up: merge tiny chunks forward until min size.
     let mut topped = Vec::new();
@@ -1538,6 +1642,20 @@ fn chunk_markdown_page(content: &str) -> Vec<String> {
     if let Some(last) = pending {
         topped.push(last);
     }
+
+    // Tail fix: if the final chunk is below min size, append it to previous.
+    if topped.len() >= 2 {
+        let last_len = topped.last().map(|s| s.chars().count()).unwrap_or(0);
+        if last_len < CHUNK_MIN_CHARS {
+            if let Some(last_chunk) = topped.pop() {
+                if let Some(prev) = topped.last_mut() {
+                    prev.push_str("\n\n");
+                    prev.push_str(&last_chunk);
+                }
+            }
+        }
+    }
+
     topped
 }
 
