@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 use rayon::prelude::*;
 use regex::Regex;
@@ -334,6 +335,15 @@ fn now_epoch() -> String {
         .map(|d| d.as_secs())
         .unwrap_or(0);
     secs.to_string()
+}
+
+fn human_time(epoch: &str) -> String {
+    if let Ok(secs) = epoch.parse::<i64>() {
+        if let Some(dt) = DateTime::<Utc>::from_timestamp(secs, 0) {
+            return dt.format("%B %-d, %Y").to_string();
+        }
+    }
+    epoch.to_string()
 }
 
 fn init_db(db_path: &Path) -> Result<Connection, Box<dyn Error>> {
@@ -1202,7 +1212,7 @@ fn list_libraries(conn: &Connection) -> Result<(), Box<dyn Error>> {
         println!("{library_name}");
         println!("  source: {source_url}");
         println!("  chunks: {count}");
-        println!("  last refreshed: {refreshed}");
+        println!("  last refreshed: {}", human_time(&refreshed));
     }
     Ok(())
 }
@@ -1222,8 +1232,7 @@ fn show_library(conn: &Connection, input_name: &str) -> Result<(), Box<dyn Error
     println!("library_name: {library_name}");
     println!("source_url: {source_url}");
     println!("chunk_count: {count}");
-    println!("last_refreshed_at: {refreshed}");
-
+    println!("last_refreshed_at: {}", human_time(&refreshed));
     let mut alias_stmt = conn
         .prepare("SELECT alias FROM library_aliases WHERE library_name = ?1 ORDER BY alias ASC")?;
     let alias_rows = alias_stmt.query_map(params![library_name], |row| row.get::<_, String>(0))?;

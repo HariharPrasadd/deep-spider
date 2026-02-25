@@ -2,3 +2,4 @@ target/
 output.txt
 plshelp.db
 artifacts/
+.fastembed_cache
