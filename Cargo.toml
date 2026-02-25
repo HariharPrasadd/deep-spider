@@ -4,10 +4,14 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+fastembed = "5.11.0"
 hashbrown = "0.16.1"
 html2md = "0.2.15"
+rayon = "1.11.0"
 regex = "1.12.3"
+rusqlite = { version = "0.31.0", features = ["bundled"] }
 scraper = "0.25.0"
+sentencex = "0.1.13"
 spider = { version = "2.45.19", features = ["regex"] }
 termios = "0.3.3"
 url = "2.5.8"
