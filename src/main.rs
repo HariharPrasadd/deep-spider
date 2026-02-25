@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 use rayon::prelude::*;
 use regex::Regex;
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 use scraper::{Html, Selector};
 use sentencex::segment;
 use spider::compact_str::CompactString;
@@ -187,23 +187,30 @@ async fn run() -> Result<(), Box<dyn Error>> {
         return Ok(());
     }
 
-    fs::create_dir_all(artifacts_root())?;
     let conn = init_db(&app_root().join("plshelp.db"))?;
     let command = args[0].as_str();
 
     match command {
         "add" => {
             if args.len() < 3 {
-                return Err("Usage: plshelp add <library_name> <source_url>".into());
+                return Err(
+                    "Usage: plshelp add <library_name> <source_url> [--include-artifacts[=/path]]"
+                        .into(),
+                );
             }
-            add_library(&conn, &args[1], &args[2]).await?;
+            let include_artifacts = parse_include_artifacts_flag(&args[3..], &args[1]);
+            add_library(&conn, &args[1], &args[2], include_artifacts).await?;
             println!("Done.");
         }
         "crawl" => {
             if args.len() < 3 {
-                return Err("Usage: plshelp crawl <library_name> <source_url>".into());
+                return Err(
+                    "Usage: plshelp crawl <library_name> <source_url> [--include-artifacts[=/path]]"
+                        .into(),
+                );
             }
-            crawl_library(&conn, &args[1], &args[2], "crawl").await?;
+            let include_artifacts = parse_include_artifacts_flag(&args[3..], &args[1]);
+            crawl_library(&conn, &args[1], &args[2], "crawl", include_artifacts).await?;
             println!("Done.");
         }
         "index" => {
@@ -216,9 +223,24 @@ async fn run() -> Result<(), Box<dyn Error>> {
         }
         "refresh" => {
             if args.len() < 2 {
-                return Err("Usage: plshelp refresh <library_name>".into());
+                return Err(
+                    "Usage: plshelp refresh <library_name> [--include-artifacts[=/path]]".into(),
+                );
             }
-            refresh_library(&conn, &args[1]).await?;
+            let include_artifacts = parse_include_artifacts_flag(&args[2..], &args[1]);
+            refresh_library(&conn, &args[1], include_artifacts).await?;
+            println!("Done.");
+        }
+        "export" => {
+            if args.len() < 2 {
+                return Err("Usage: plshelp export <library_name> [path]".into());
+            }
+            let output_dir = if args.len() >= 3 {
+                Some(PathBuf::from(args[2].clone()))
+            } else {
+                None
+            };
+            export_library(&conn, &args[1], output_dir.as_deref())?;
             println!("Done.");
         }
         "query" => {
@@ -300,10 +322,11 @@ async fn run() -> Result<(), Box<dyn Error>> {
 
 fn print_help() {
     println!("plshelp <command>");
-    println!("  add <library_name> <source_url>");
-    println!("  crawl <library_name> <source_url>");
+    println!("  add <library_name> <source_url> [--include-artifacts[=/path]]");
+    println!("  crawl <library_name> <source_url> [--include-artifacts[=/path]]");
     println!("  index <library_name> [--file /path/to/file]");
-    println!("  refresh <library_name>");
+    println!("  refresh <library_name> [--include-artifacts[=/path]]");
+    println!("  export <library_name> [path]");
     println!(
         "  query <library_name> \"<question>\" [--mode hybrid|vector|keyword] [--top-k N] [--context N]"
     );
@@ -374,6 +397,15 @@ fn init_db(db_path: &Path) -> Result<Connection, Box<dyn Error>> {
             token_count INTEGER NOT NULL,
             created_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS pages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            library_name TEXT NOT NULL,
+            page_order INTEGER NOT NULL,
+            source_url TEXT NOT NULL,
+            content TEXT NOT NULL,
+            content_size_bytes INTEGER NOT NULL,
+            crawled_at TEXT NOT NULL
+        );
         CREATE TABLE IF NOT EXISTS jobs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             library_name TEXT NOT NULL,
@@ -383,8 +415,15 @@ fn init_db(db_path: &Path) -> Result<Connection, Box<dyn Error>> {
             ended_at TEXT,
             message TEXT
         );
+        CREATE TABLE IF NOT EXISTS library_texts (
+            library_name TEXT PRIMARY KEY,
+            content TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
         CREATE INDEX IF NOT EXISTS idx_chunks_library_name ON chunks(library_name);
         CREATE INDEX IF NOT EXISTS idx_chunks_library_page ON chunks(library_name, source_url, chunk_index_in_page);
+        CREATE INDEX IF NOT EXISTS idx_pages_library_name ON pages(library_name);
+        CREATE INDEX IF NOT EXISTS idx_pages_library_order ON pages(library_name, page_order);
         ",
     )?;
     Ok(conn)
@@ -485,6 +524,87 @@ fn parse_index_file_flag(flags: &[String]) -> Option<String> {
     None
 }
 
+fn parse_include_artifacts_flag(flags: &[String], library_name: &str) -> Option<PathBuf> {
+    let mut artifacts: Option<PathBuf> = None;
+    let mut i = 0usize;
+    while i < flags.len() {
+        if flags[i] == "--include-artifacts" {
+            if i + 1 < flags.len() && !flags[i + 1].starts_with("--") {
+                artifacts = Some(PathBuf::from(flags[i + 1].clone()));
+                i += 2;
+            } else {
+                artifacts = Some(compiled_dir(library_name));
+                i += 1;
+            }
+            continue;
+        }
+        if let Some(raw_path) = flags[i].strip_prefix("--include-artifacts=") {
+            if raw_path.is_empty() {
+                artifacts = Some(compiled_dir(library_name));
+            } else {
+                artifacts = Some(PathBuf::from(raw_path));
+            }
+            i += 1;
+            continue;
+        }
+        i += 1;
+    }
+    artifacts
+}
+
+fn write_artifacts(output_dir: &Path, content: &str) -> Result<(), Box<dyn Error>> {
+    fs::create_dir_all(output_dir)?;
+    fs::write(output_dir.join("docs.txt"), content)?;
+    fs::write(output_dir.join("docs.md"), content)?;
+    Ok(())
+}
+
+fn export_library(
+    conn: &Connection,
+    input_name: &str,
+    output_dir: Option<&Path>,
+) -> Result<(), Box<dyn Error>> {
+    let library_name = resolve_library_name(conn, input_name)?;
+    let output_dir = output_dir
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| compiled_dir(&library_name));
+    let mut stmt = conn.prepare(
+        "SELECT content
+         FROM pages
+         WHERE library_name = ?1
+         ORDER BY page_order ASC",
+    )?;
+    let rows = stmt.query_map(params![library_name], |row| row.get::<_, String>(0))?;
+    let mut page_contents = Vec::new();
+    for row in rows {
+        page_contents.push(row?);
+    }
+
+    let compiled = if !page_contents.is_empty() {
+        let mut text = page_contents.join("\n\n");
+        if !text.is_empty() {
+            text.push_str("\n\n");
+        }
+        text
+    } else {
+        conn.query_row(
+            "SELECT content FROM library_texts WHERE library_name = ?1",
+            params![library_name],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .ok_or_else(|| {
+            format!(
+                "No crawled content found for '{}'. Run crawl/add first.",
+                library_name
+            )
+        })?
+    };
+
+    write_artifacts(&output_dir, &compiled)?;
+    Ok(())
+}
+
 fn resolve_library_name(conn: &Connection, input: &str) -> Result<String, Box<dyn Error>> {
     if let Ok(name) = conn.query_row(
         "SELECT library_name FROM libraries WHERE library_name = ?1",
@@ -505,6 +625,7 @@ async fn add_library(
     conn: &Connection,
     library_name: &str,
     source_url: &str,
+    include_artifacts: Option<PathBuf>,
 ) -> Result<(), Box<dyn Error>> {
     let exists: i64 = conn.query_row(
         "SELECT COUNT(*) FROM libraries WHERE library_name = ?1",
@@ -514,19 +635,37 @@ async fn add_library(
     if exists > 0 {
         return Err(format!("Library '{}' already exists.", library_name).into());
     }
-    crawl_library(conn, library_name, source_url, "add-crawl").await?;
+    crawl_library(
+        conn,
+        library_name,
+        source_url,
+        "add-crawl",
+        include_artifacts.clone(),
+    )
+    .await?;
     index_library(conn, library_name, None, "add-index")?;
     Ok(())
 }
 
-async fn refresh_library(conn: &Connection, input_name: &str) -> Result<(), Box<dyn Error>> {
+async fn refresh_library(
+    conn: &Connection,
+    input_name: &str,
+    include_artifacts: Option<PathBuf>,
+) -> Result<(), Box<dyn Error>> {
     let library_name = resolve_library_name(conn, input_name)?;
     let source_url: String = conn.query_row(
         "SELECT source_url FROM libraries WHERE library_name = ?1",
         params![library_name],
         |row| row.get(0),
     )?;
-    crawl_library(conn, &library_name, &source_url, "refresh-crawl").await?;
+    crawl_library(
+        conn,
+        &library_name,
+        &source_url,
+        "refresh-crawl",
+        include_artifacts.clone(),
+    )
+    .await?;
     index_library(conn, &library_name, None, "refresh-index")?;
     Ok(())
 }
@@ -621,6 +760,7 @@ async fn crawl_library(
     library_name: &str,
     source_url: &str,
     job_type: &str,
+    include_artifacts: Option<PathBuf>,
 ) -> Result<(), Box<dyn Error>> {
     let job_id = start_job(conn, library_name, job_type)?;
 
@@ -689,26 +829,50 @@ async fn crawl_library(
         if let Ok(mut s) = stage.lock() {
             *s = String::from("Writing files");
         }
-        let page_htmls: Vec<String> = pages.iter().map(|p| p.get_html()).collect();
+        let page_inputs: Vec<(String, String)> = pages
+            .iter()
+            .map(|p| (p.get_url().to_string(), p.get_html()))
+            .collect();
         // Indexed parallel iterators preserve order on collect.
-        let converted: Vec<String> = page_htmls
+        let converted: Vec<(String, String)> = page_inputs
             .into_par_iter()
-            .map(|html| {
+            .map(|(url, html)| {
                 let extracted_html = extract_content_html(&html);
                 let markdown = cleanup_markdown(&html2md::parse_html(&extracted_html));
-                markdown
+                (url, markdown)
             })
             .collect();
-        let mut compiled = converted.join("\n\n");
+        let mut compiled_parts = Vec::with_capacity(converted.len());
+        for (_, markdown) in &converted {
+            compiled_parts.push(markdown.clone());
+        }
+        let mut compiled = compiled_parts.join("\n\n");
         if !compiled.is_empty() {
             compiled.push_str("\n\n");
         }
 
-        let out_dir = compiled_dir(library_name);
-        fs::create_dir_all(&out_dir)?;
-        fs::write(out_dir.join("docs.txt"), &compiled)?;
-        // Keep docs.md as a direct copy for now.
-        fs::write(out_dir.join("docs.md"), &compiled)?;
+        let now = now_epoch();
+        conn.execute(
+            "INSERT OR REPLACE INTO library_texts (library_name, content, updated_at) VALUES (?1, ?2, ?3)",
+            params![library_name, compiled, now],
+        )?;
+
+        if let Some(path) = include_artifacts.clone() {
+            write_artifacts(&path, &compiled)?;
+        }
+
+        let tx = conn.unchecked_transaction()?;
+        tx.execute("DELETE FROM pages WHERE library_name = ?1", params![library_name])?;
+        for (page_order, (url, markdown)) in converted.iter().enumerate() {
+            let content_size = markdown.len() as i64;
+            tx.execute(
+                "INSERT INTO pages (
+                    library_name, page_order, source_url, content, content_size_bytes, crawled_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![library_name, page_order as i64, url, markdown, content_size, now],
+            )?;
+        }
+        tx.commit()?;
 
         if let Ok(mut s) = stage.lock() {
             *s = String::from("Finalizing");
@@ -718,7 +882,6 @@ async fn crawl_library(
         print!("\r                    \r");
         let _ = stdout().flush();
 
-        let now = now_epoch();
         conn.execute(
             "INSERT OR REPLACE INTO libraries (library_name, source_url, created_at, updated_at, last_refreshed_at)
              VALUES (
@@ -812,6 +975,12 @@ fn index_library(
     job_type: &str,
 ) -> Result<(), Box<dyn Error>> {
     let resolved_name = resolve_library_name(conn, input_name);
+    let custom_file_source_url = if let Some(file_path) = custom_file {
+        let canonical_path = PathBuf::from(file_path).canonicalize()?;
+        Some(format!("file://{}", canonical_path.display()))
+    } else {
+        None
+    };
     let (library_name, source_url) = match resolved_name {
         Ok(name) => {
             let source_url: String = conn.query_row(
@@ -828,8 +997,9 @@ fn index_library(
                     input_name
                 )
             })?;
-            let canonical_path = PathBuf::from(file_path).canonicalize()?;
-            let source_url = format!("file://{}", canonical_path.display());
+            let source_url = custom_file_source_url
+                .clone()
+                .unwrap_or_else(|| format!("file://{}", file_path));
             let now = now_epoch();
             conn.execute(
                 "INSERT INTO libraries (library_name, source_url, created_at, updated_at, last_refreshed_at)
@@ -842,31 +1012,105 @@ fn index_library(
 
     let job_id = start_job(conn, &library_name, job_type)?;
     let result = (|| -> Result<String, Box<dyn Error>> {
-        let source_text = if let Some(file_path) = custom_file {
-            fs::read_to_string(file_path)?
+        let page_inputs: Vec<(i64, String, String)> = if let Some(file_path) = custom_file {
+            let source_text = fs::read_to_string(file_path)?;
+            let page_url = custom_file_source_url
+                .clone()
+                .unwrap_or_else(|| source_url.clone());
+            vec![(0i64, page_url, source_text)]
         } else {
-            let out_dir = compiled_dir(&library_name);
-            let txt = out_dir.join("docs.txt");
-            let md = out_dir.join("docs.md");
-            if txt.exists() {
-                fs::read_to_string(txt)?
-            } else if md.exists() {
-                fs::read_to_string(md)?
+            let mut stmt = conn.prepare(
+                "SELECT page_order, source_url, content
+                 FROM pages
+                 WHERE library_name = ?1
+                 ORDER BY page_order ASC",
+            )?;
+            let rows = stmt.query_map(params![library_name], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })?;
+            let mut out = Vec::new();
+            for row in rows {
+                out.push(row?);
+            }
+            if !out.is_empty() {
+                out
             } else {
-                return Err(format!(
-                    "No compiled docs found for '{}'. Run crawl/add first.",
-                    library_name
-                )
-                .into());
+                let from_db: Option<String> = conn
+                    .query_row(
+                        "SELECT content FROM library_texts WHERE library_name = ?1",
+                        params![library_name],
+                        |row| row.get(0),
+                    )
+                    .optional()?;
+                if let Some(content) = from_db {
+                    vec![(0i64, source_url.clone(), content)]
+                } else {
+                    let out_dir = compiled_dir(&library_name);
+                    let txt = out_dir.join("docs.txt");
+                    let md = out_dir.join("docs.md");
+                    if txt.exists() {
+                        vec![(0i64, source_url.clone(), fs::read_to_string(txt)?)]
+                    } else if md.exists() {
+                        vec![(0i64, source_url.clone(), fs::read_to_string(md)?)]
+                    } else {
+                        return Err(format!(
+                            "No crawled text found for '{}'. Run crawl/add first.",
+                            library_name
+                        )
+                        .into());
+                    }
+                }
             }
         };
 
-        let mut chunks: Vec<String> = segment("en", &source_text)
-            .into_iter()
-            .map(|s| s.to_owned())
-            .collect();
-        chunks = merge_qa_pairs(chunks);
-        chunks.retain(|c| !c.trim().is_empty());
+        if page_inputs.is_empty() {
+            return Err("No pages available for indexing.".into());
+        }
+
+        if custom_file.is_some() {
+            let tx = conn.unchecked_transaction()?;
+            tx.execute(
+                "DELETE FROM pages WHERE library_name = ?1",
+                params![library_name],
+            )?;
+            let now = now_epoch();
+            for (page_order, page_url, content) in &page_inputs {
+                tx.execute(
+                    "INSERT INTO pages (
+                        library_name, page_order, source_url, content, content_size_bytes, crawled_at
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    params![
+                        library_name,
+                        page_order,
+                        page_url,
+                        content,
+                        content.len() as i64,
+                        now
+                    ],
+                )?;
+            }
+            tx.commit()?;
+        }
+
+        let mut chunks = Vec::new();
+        let mut chunk_meta: Vec<(i64, String, i64)> = Vec::new();
+        for (page_order, page_url, page_content) in &page_inputs {
+            let mut page_chunks: Vec<String> = segment("en", page_content)
+                .into_iter()
+                .map(|s| s.to_owned())
+                .collect();
+            page_chunks = merge_qa_pairs(page_chunks);
+            page_chunks.retain(|c| !c.trim().is_empty());
+            for (chunk_index_in_page, chunk) in page_chunks.into_iter().enumerate() {
+                chunk_meta.push((*page_order, page_url.clone(), chunk_index_in_page as i64));
+                chunks.push(chunk);
+            }
+        }
+
         if chunks.is_empty() {
             return Err("No chunks generated from input.".into());
         }
@@ -888,6 +1132,7 @@ fn index_library(
         let now = now_epoch();
         for (i, chunk) in chunks.iter().enumerate() {
             let token_count = chunk.split_whitespace().count() as i64;
+            let (source_page_order, chunk_source_url, chunk_index_in_page) = &chunk_meta[i];
             tx.execute(
                 "INSERT INTO chunks (
                     library_name, source_url, source_page_order, chunk_index_in_page,
@@ -895,9 +1140,9 @@ fn index_library(
                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                 params![
                     library_name,
-                    source_url,
-                    0i64,
-                    i as i64,
+                    chunk_source_url,
+                    source_page_order,
+                    chunk_index_in_page,
                     i as i64,
                     chunk,
                     embedding_to_bytes(&embeddings[i]),
@@ -1191,6 +1436,127 @@ fn add_alias(conn: &Connection, input_name: &str, alias: &str) -> Result<(), Box
     Ok(())
 }
 
+fn library_status(conn: &Connection, library_name: &str) -> Result<String, Box<dyn Error>> {
+    let status: Option<String> = conn
+        .query_row(
+            "SELECT status FROM jobs WHERE library_name = ?1 ORDER BY id DESC LIMIT 1",
+            params![library_name],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(status.unwrap_or_else(|| "unknown".to_string()))
+}
+
+fn latest_success_time_by_kind(
+    conn: &Connection,
+    library_name: &str,
+    kind: &str,
+) -> Result<Option<String>, Box<dyn Error>> {
+    let pattern = format!("%{kind}%");
+    let value: Option<String> = conn
+        .query_row(
+            "SELECT ended_at
+             FROM jobs
+             WHERE library_name = ?1 AND status = 'success' AND job_type LIKE ?2
+             ORDER BY id DESC
+             LIMIT 1",
+            params![library_name, pattern],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(value)
+}
+
+fn latest_failed_message(
+    conn: &Connection,
+    library_name: &str,
+) -> Result<Option<String>, Box<dyn Error>> {
+    let msg: Option<String> = conn
+        .query_row(
+            "SELECT message FROM jobs WHERE library_name = ?1 AND status = 'failed' ORDER BY id DESC LIMIT 1",
+            params![library_name],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(msg)
+}
+
+fn page_and_chunk_stats(
+    conn: &Connection,
+    library_name: &str,
+) -> Result<(i64, i64, f64, i64, i64, i64), Box<dyn Error>> {
+    let page_count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM pages WHERE library_name = ?1",
+        params![library_name],
+        |row| row.get(0),
+    )?;
+    let chunk_count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM chunks WHERE library_name = ?1",
+        params![library_name],
+        |row| row.get(0),
+    )?;
+
+    if page_count == 0 {
+        if chunk_count > 0 {
+            return Ok((
+                1,
+                chunk_count,
+                chunk_count as f64,
+                chunk_count,
+                chunk_count,
+                0,
+            ));
+        }
+        return Ok((0, 0, 0.0, 0, 0, 0));
+    }
+
+    let mut stmt = conn.prepare(
+        "SELECT p.page_order, COUNT(c.id) AS chunk_count
+         FROM pages p
+         LEFT JOIN chunks c
+           ON c.library_name = p.library_name
+          AND c.source_page_order = p.page_order
+         WHERE p.library_name = ?1
+         GROUP BY p.page_order
+         ORDER BY p.page_order ASC",
+    )?;
+    let rows = stmt.query_map(params![library_name], |row| row.get::<_, i64>(1))?;
+
+    let mut min_chunks = i64::MAX;
+    let mut max_chunks = i64::MIN;
+    let mut total = 0i64;
+    let mut counted_pages = 0i64;
+    let mut empty_pages = 0i64;
+
+    for row in rows {
+        let count = row?;
+        total += count;
+        counted_pages += 1;
+        if count == 0 {
+            empty_pages += 1;
+        }
+        if count < min_chunks {
+            min_chunks = count;
+        }
+        if count > max_chunks {
+            max_chunks = count;
+        }
+    }
+
+    if counted_pages == 0 {
+        return Ok((page_count, chunk_count, 0.0, 0, 0, page_count));
+    }
+
+    Ok((
+        page_count,
+        chunk_count,
+        total as f64 / counted_pages as f64,
+        min_chunks,
+        max_chunks,
+        empty_pages,
+    ))
+}
+
 fn list_libraries(conn: &Connection) -> Result<(), Box<dyn Error>> {
     let mut stmt = conn.prepare(
         "SELECT library_name, source_url, last_refreshed_at FROM libraries ORDER BY library_name ASC",
@@ -1204,14 +1570,13 @@ fn list_libraries(conn: &Connection) -> Result<(), Box<dyn Error>> {
     })?;
     for row in rows {
         let (library_name, source_url, refreshed) = row?;
-        let count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM chunks WHERE library_name = ?1",
-            params![library_name],
-            |r| r.get(0),
-        )?;
+        let (pages, chunks, _, _, _, _) = page_and_chunk_stats(conn, &library_name)?;
+        let status = library_status(conn, &library_name)?;
         println!("{library_name}");
         println!("  source: {source_url}");
-        println!("  chunks: {count}");
+        println!("  pages: {pages}");
+        println!("  chunks: {chunks}");
+        println!("  status: {status}");
         println!("  last refreshed: {}", human_time(&refreshed));
     }
     Ok(())
@@ -1224,14 +1589,47 @@ fn show_library(conn: &Connection, input_name: &str) -> Result<(), Box<dyn Error
         params![library_name],
         |row| Ok((row.get(0)?, row.get(1)?)),
     )?;
-    let count: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM chunks WHERE library_name = ?1",
+    let (pages, chunks, avg_chunks, min_chunks, max_chunks, empty_pages) =
+        page_and_chunk_stats(conn, &library_name)?;
+    let content_size_bytes: i64 = conn.query_row(
+        "SELECT COALESCE(SUM(content_size_bytes), 0) FROM pages WHERE library_name = ?1",
         params![library_name],
         |row| row.get(0),
     )?;
+    let latest_status = library_status(conn, &library_name)?;
+    let last_crawled_at = latest_success_time_by_kind(conn, &library_name, "crawl")?;
+    let last_indexed_at = latest_success_time_by_kind(conn, &library_name, "index")?;
+    let latest_error = latest_failed_message(conn, &library_name)?;
+
     println!("library_name: {library_name}");
     println!("source_url: {source_url}");
-    println!("chunk_count: {count}");
+    println!("page_count: {pages}");
+    println!("chunk_count: {chunks}");
+    println!("avg_chunks_per_page: {:.2}", avg_chunks);
+    println!("min_chunks_per_page: {min_chunks}");
+    println!("max_chunks_per_page: {max_chunks}");
+    println!("empty_pages: {empty_pages}");
+    println!("content_size_bytes: {content_size_bytes}");
+    println!("indexed_model: {:?}", DEFAULT_EMBEDDING_MODEL);
+    println!("embedding_dim: 1024");
+    println!("latest_job_status: {latest_status}");
+    println!(
+        "last_crawled_at: {}",
+        last_crawled_at
+            .as_deref()
+            .map(human_time)
+            .unwrap_or_else(|| "n/a".to_string())
+    );
+    println!(
+        "last_indexed_at: {}",
+        last_indexed_at
+            .as_deref()
+            .map(human_time)
+            .unwrap_or_else(|| "n/a".to_string())
+    );
+    if let Some(err) = latest_error {
+        println!("latest_error: {err}");
+    }
     println!("last_refreshed_at: {}", human_time(&refreshed));
     let mut alias_stmt = conn
         .prepare("SELECT alias FROM library_aliases WHERE library_name = ?1 ORDER BY alias ASC")?;
@@ -1254,6 +1652,14 @@ fn remove_library(conn: &Connection, input_name: &str) -> Result<(), Box<dyn Err
     )?;
     conn.execute(
         "DELETE FROM chunks WHERE library_name = ?1",
+        params![library_name],
+    )?;
+    conn.execute(
+        "DELETE FROM pages WHERE library_name = ?1",
+        params![library_name],
+    )?;
+    conn.execute(
+        "DELETE FROM library_texts WHERE library_name = ?1",
         params![library_name],
     )?;
     conn.execute(
