@@ -84,6 +84,32 @@ static MARKDOWN_LINE_REGEXES: LazyLock<Vec<Regex>> = LazyLock::new(|| {
 static MULTI_NEWLINE_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\n{3,}").expect("valid regex"));
 
+static HTML_REGEX_HINTS: &[&str] = &[
+    "<!--",
+    "<script",
+    "<style",
+    "<noscript",
+    "<template",
+    "<nav",
+    "<header",
+    "<footer",
+    "<aside",
+    "sidebar",
+    "breadcrumb",
+    "cookie",
+    "<button",
+    "<form",
+];
+
+static MARKDOWN_HINTS: &[&str] = &[
+    "was this helpful?",
+    "copy page",
+    "menu",
+    "send",
+    "latest version",
+    "supported.",
+];
+
 struct TerminalEchoGuard {
     fd: i32,
     original: Termios,
@@ -543,7 +569,8 @@ fn extract_content_html(html: &str) -> String {
 
     for selector in CONTENT_SELECTORS.iter() {
         for node in document.select(selector) {
-            let text_len = node.text().collect::<String>().trim().len();
+            // Avoid allocating a full string only to estimate section size.
+            let text_len: usize = node.text().map(|s| s.trim().len()).sum();
             if text_len > best_text_len {
                 let selected_html = node.html();
                 if !selected_html.trim().is_empty() {
@@ -555,18 +582,26 @@ fn extract_content_html(html: &str) -> String {
     }
 
     let mut cleaned = best_html.unwrap_or_else(|| html.to_string());
-    for re in HTML_CLEANUP_REGEXES.iter() {
-        cleaned = re.replace_all(&cleaned, "").into_owned();
+    let lower = cleaned.to_ascii_lowercase();
+    if HTML_REGEX_HINTS.iter().any(|h| lower.contains(h)) {
+        for re in HTML_CLEANUP_REGEXES.iter() {
+            cleaned = re.replace_all(&cleaned, "").into_owned();
+        }
     }
     cleaned
 }
 
 fn cleanup_markdown(markdown: &str) -> String {
     let mut cleaned = markdown.to_string();
-    for re in MARKDOWN_LINE_REGEXES.iter() {
-        cleaned = re.replace_all(&cleaned, "").into_owned();
+    let lower = cleaned.to_ascii_lowercase();
+    if MARKDOWN_HINTS.iter().any(|h| lower.contains(h)) {
+        for re in MARKDOWN_LINE_REGEXES.iter() {
+            cleaned = re.replace_all(&cleaned, "").into_owned();
+        }
     }
-    cleaned = MULTI_NEWLINE_RE.replace_all(&cleaned, "\n\n").into_owned();
+    if cleaned.contains("\n\n\n") {
+        cleaned = MULTI_NEWLINE_RE.replace_all(&cleaned, "\n\n").into_owned();
+    }
 
     cleaned.trim().to_string()
 }
@@ -645,21 +680,16 @@ async fn crawl_library(
             *s = String::from("Writing files");
         }
         let page_htmls: Vec<String> = pages.iter().map(|p| p.get_html()).collect();
-        let mut converted: Vec<(usize, String)> = page_htmls
+        // Indexed parallel iterators preserve order on collect.
+        let converted: Vec<String> = page_htmls
             .into_par_iter()
-            .enumerate()
-            .map(|(idx, html)| {
+            .map(|html| {
                 let extracted_html = extract_content_html(&html);
                 let markdown = cleanup_markdown(&html2md::parse_html(&extracted_html));
-                (idx, markdown)
+                markdown
             })
             .collect();
-        converted.sort_by_key(|(idx, _)| *idx);
-        let mut compiled = converted
-            .into_iter()
-            .map(|(_, text)| text)
-            .collect::<Vec<_>>()
-            .join("\n\n");
+        let mut compiled = converted.join("\n\n");
         if !compiled.is_empty() {
             compiled.push_str("\n\n");
         }
