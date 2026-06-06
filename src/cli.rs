@@ -64,8 +64,11 @@ pub(crate) fn print_help() {
     print_command("crawl", "<library> <source>", "Crawl a source without indexing", PURPLE);
     print_command("query", "<library> \"<question>\"", "Search one library", PURPLE);
     print_command("trace", "<library> \"<question>\"", "Search with scoring details", PURPLE);
-    print_command("ask", "\"<question>\"", "Search across libraries", PURPLE);
-    print_command("<library>", "\"<question>\"", "Query alias", PURPLE);
+    // Show the optional library scope in the top-level help so the summary matches
+    // the actual ask parser and command-specific usage text.
+    print_command("ask", "\"<question>\" [--libraries a,b,c]", "Search across libraries", PURPLE);
+    // Surface the shorthand as the normal single-library form, not just an alias-only trick.
+    print_command("<library>", "\"<question>\"", "Search one library (shorthand)", PURPLE);
     println!();
 
     print_command("index", "<library> | --all", "Build pages from raw inputs", BLUE);
@@ -73,8 +76,8 @@ pub(crate) fn print_help() {
     print_command("embed", "<library> | --all", "Generate embeddings for chunks", BLUE);
     print_command("refresh", "[libraries...] | --all", "Recompute stats without crawling", BLUE);
     print_command("merge", "<group> <library...>", "Combine libraries into one view", BLUE);
-    print_command("export", "<library> [path] | --all", "Write stored content to disk", BLUE);
-    print_command("list", "", "Show indexed libraries", BLUE);
+    print_command("export", "<library> [path] | --all [path]", "Write stored content to disk", BLUE);
+    print_command("list", "", "Show indexed libraries and groups", BLUE);
     print_command("show", "<library>", "Inspect one library", BLUE);
     print_command("open", "<chunk_id>", "Open one stored chunk", BLUE);
     println!();

@@ -899,7 +899,7 @@ bun add -g @generalinteraction/plshelp" aria-label="Copy">
 plshelp add nextjs https://nextjs.org/docs
 
 # Step 2: ask it something
-plshelp query nextjs &quot;how does the app router work&quot;" aria-label="Copy">
+plshelp nextjs &quot;how does the app router work&quot;" aria-label="Copy">
                             <svg class="icon-copy" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
                                 stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                                 <rect x="9" y="9" width="13" height="13" rx="2" />
@@ -915,7 +915,7 @@ plshelp query nextjs &quot;how does the app router work&quot;" aria-label="Copy"
 <span class="cmd">plshelp</span> add <span class="arg">nextjs</span> https://nextjs.org/docs
 
 <span class="cmt"># Step 2: ask it something</span>
-<span class="cmd">plshelp</span> query <span class="arg">nextjs</span> <span class="flag">"how does the app router work"</span></pre>
+<span class="cmd">plshelp</span> <span class="arg">nextjs</span> <span class="flag">"how does the app router work"</span></pre>
                 </div>
                 <p class="doc-p">
                     That's it. <span class="ci">add</span> crawls the site, chunks the content, and builds a search
@@ -1094,7 +1094,7 @@ plshelp init" aria-label="Copy">
                 <div class="code-block">
                     <div class="code-block-header"><span class="code-block-label">shell</span>
                         <button class="code-copy-btn" data-copy="plshelp index mynotes --file ./notes/architecture.md
-plshelp query mynotes &quot;how is the auth service structured&quot;" aria-label="Copy">
+plshelp mynotes &quot;how is the auth service structured&quot;" aria-label="Copy">
                             <svg class="icon-copy" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
                                 stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                                 <rect x="9" y="9" width="13" height="13" rx="2" />
@@ -1107,7 +1107,7 @@ plshelp query mynotes &quot;how is the auth service structured&quot;" aria-label
                         </button>
                     </div>
                     <pre><span class="cmd">plshelp</span> index <span class="arg">mynotes</span> <span class="flag">--file</span> ./notes/architecture.md
-<span class="cmd">plshelp</span> query <span class="arg">mynotes</span> <span class="flag">"how is the auth service structured"</span></pre>
+<span class="cmd">plshelp</span> <span class="arg">mynotes</span> <span class="flag">"how is the auth service structured"</span></pre>
                 </div>
                 <p class="doc-p">
                     Works with <span class="ci">.md</span> and <span class="ci">.txt</span> files. The library name is
@@ -1121,12 +1121,13 @@ plshelp query mynotes &quot;how is the auth service structured&quot;" aria-label
             <div class="doc-section" id="querying">
                 <h2 class="doc-h2">Querying</h2>
                 <p class="doc-p">
-                    The basic query takes a library name and a question. By default it returns the single most relevant
-                    result.
+                    The basic query takes a library name and a question. For normal libraries, the easiest syntax is
+                    the shorthand form: <span class="ci">plshelp &lt;library&gt; "&lt;question&gt;"</span>. By default it
+                    returns the single most relevant result.
                 </p>
                 <div class="code-block">
                     <div class="code-block-header"><span class="code-block-label">shell</span>
-                        <button class="code-copy-btn" data-copy="plshelp query rust &quot;how do lifetimes work&quot;"
+                        <button class="code-copy-btn" data-copy="plshelp rust &quot;how do lifetimes work&quot;"
                             aria-label="Copy">
                             <svg class="icon-copy" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
                                 stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1139,7 +1140,7 @@ plshelp query mynotes &quot;how is the auth service structured&quot;" aria-label
                             </svg>
                         </button>
                     </div>
-                    <pre><span class="cmd">plshelp</span> query <span class="arg">rust</span> <span class="flag">"how do lifetimes work"</span></pre>
+                    <pre><span class="cmd">plshelp</span> <span class="arg">rust</span> <span class="flag">"how do lifetimes work"</span></pre>
                 </div>
 
                 <h3 class="doc-h3">Getting more results</h3>
@@ -1150,7 +1151,7 @@ plshelp query mynotes &quot;how is the auth service structured&quot;" aria-label
                 <div class="code-block">
                     <div class="code-block-header"><span class="code-block-label">shell</span>
                         <button class="code-copy-btn"
-                            data-copy="plshelp query rust &quot;how do lifetimes work&quot; --top-k 3 --context 1"
+                            data-copy="plshelp rust &quot;how do lifetimes work&quot; --top-k 3 --context 1"
                             aria-label="Copy">
                             <svg class="icon-copy" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
                                 stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1163,7 +1164,7 @@ plshelp query mynotes &quot;how is the auth service structured&quot;" aria-label
                             </svg>
                         </button>
                     </div>
-                    <pre><span class="cmd">plshelp</span> query <span class="arg">rust</span> <span class="flag">"how do lifetimes work"</span> <span class="flag">--top-k</span> 3 <span class="flag">--context</span> 1</pre>
+                    <pre><span class="cmd">plshelp</span> <span class="arg">rust</span> <span class="flag">"how do lifetimes work"</span> <span class="flag">--top-k</span> 3 <span class="flag">--context</span> 1</pre>
                 </div>
 
                 <h3 class="doc-h3">Searching across multiple libraries</h3>
@@ -1196,9 +1197,9 @@ plshelp ask &quot;how do I handle errors&quot;" aria-label="Copy">
 <span class="cmd">plshelp</span> ask <span class="flag">"how do I handle errors"</span></pre>
                 </div>
 
-                <h3 class="doc-h3">Shorthand</h3>
+                <h3 class="doc-h3">Single-library queries</h3>
                 <p class="doc-p">
-                    There's a shorthand form if you don't want to type <span class="ci">query</span> every time:
+                    The shorthand form works the same way as <span class="ci">query</span>:
                 </p>
                 <div class="code-block">
                     <div class="code-block-header"><span class="code-block-label">shell</span>
@@ -1345,7 +1346,7 @@ plshelp show rust" aria-label="Copy">
                 <div class="code-block">
                     <div class="code-block-header"><span class="code-block-label">shell</span>
                         <button class="code-copy-btn" data-copy="plshelp merge numpy numpy-userguide numpy-reference
-plshelp query numpy &quot;what is broadcasting&quot;" aria-label="Copy">
+plshelp numpy &quot;what is broadcasting&quot;" aria-label="Copy">
                             <svg class="icon-copy" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
                                 stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                                 <rect x="9" y="9" width="13" height="13" rx="2" />
@@ -1358,7 +1359,7 @@ plshelp query numpy &quot;what is broadcasting&quot;" aria-label="Copy">
                         </button>
                     </div>
                     <pre><span class="cmd">plshelp</span> merge <span class="arg">numpy</span> <span class="arg">numpy-userguide</span> <span class="arg">numpy-reference</span>
-<span class="cmd">plshelp</span> query <span class="arg">numpy</span> <span class="flag">"what is broadcasting"</span></pre>
+<span class="cmd">plshelp</span> <span class="arg">numpy</span> <span class="flag">"what is broadcasting"</span></pre>
                 </div>
 
                 <h3 class="doc-h3">Bulk operations</h3>
@@ -1387,10 +1388,10 @@ plshelp query numpy &quot;what is broadcasting&quot;" aria-label="Copy">
                         <td>Re-runs the default refresh logic across all libraries.</td>
                     </tr>
                     <tr>
-                        <td><span class="ci">export --all &lt;path&gt;</span></td>
+                        <td><span class="ci">export --all [path]</span></td>
                         <td>Exports every library to <span class="ci">&lt;path&gt;/&lt;slug&gt;/docs.md</span> and <span
-                                class="ci">docs.txt</span>. The path argument is required when using <span
-                                class="ci">--all</span>.</td>
+                                class="ci">docs.txt</span>. If you omit the path, plshelp writes each library to its
+                            default compiled output directory.</td>
                     </tr>
                     <tr>
                         <td><span class="ci">remove --all</span></td>
@@ -2169,7 +2170,7 @@ plshelp refresh [library ...]  [--json]
 plshelp refresh --all [--json]
 plshelp merge <new> <lib1> <lib2> [...] [--replace] [--json]
 plshelp export <library> [path] [--json]
-plshelp export --all <path> [--json]
+plshelp export --all [path] [--json]
 plshelp query <library> &quot;<question>&quot; [--mode hybrid|vector|keyword] [--top-k N] [--context N] [--json]
 plshelp <library> &quot;<question>&quot;
 plshelp ask &quot;<question>&quot; [--libraries a,b,c] [--mode ...] [--top-k N] [--context N] [--json]
@@ -2181,7 +2182,7 @@ plshelp open <chunk_id> [--json]
 plshelp config [--json]
 plshelp remove <library> [--json]
 plshelp remove --all [--json]
-plshelp uninstall [--all] [--binary] [--data]" aria-label="Copy">
+plshelp uninstall --all | --binary | --data" aria-label="Copy">
                             <svg class="icon-copy" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
                                 stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                                 <rect x="9" y="9" width="13" height="13" rx="2" />
@@ -2207,7 +2208,7 @@ plshelp uninstall [--all] [--binary] [--data]" aria-label="Copy">
 <span class="cmd">plshelp</span> <span class="arg">refresh</span> <span class="flag">--all [--json]</span>
 <span class="cmd">plshelp</span> <span class="arg">merge</span> <span class="arg">&lt;new&gt;</span> <span class="arg">&lt;lib1&gt;</span> <span class="arg">&lt;lib2&gt;</span> <span class="flag">[...] [--replace] [--json]</span>
 <span class="cmd">plshelp</span> <span class="arg">export</span> <span class="arg">&lt;library&gt;</span> <span class="flag">[path] [--json]</span>
-<span class="cmd">plshelp</span> <span class="arg">export</span> <span class="flag">--all &lt;path&gt; [--json]</span>
+<span class="cmd">plshelp</span> <span class="arg">export</span> <span class="flag">--all [path] [--json]</span>
 <span class="cmd">plshelp</span> <span class="arg">query</span> <span class="arg">&lt;library&gt;</span> <span class="flag">"&lt;question&gt;" [--mode hybrid|vector|keyword] [--top-k N] [--context N] [--json]</span>
 <span class="cmd">plshelp</span> <span class="arg">&lt;library&gt;</span> <span class="flag">"&lt;question&gt;"</span>
 <span class="cmd">plshelp</span> <span class="arg">ask</span> <span class="flag">"&lt;question&gt;" [--libraries a,b,c] [--mode ...] [--top-k N] [--context N] [--json]</span>
@@ -2219,7 +2220,7 @@ plshelp uninstall [--all] [--binary] [--data]" aria-label="Copy">
 <span class="cmd">plshelp</span> <span class="arg">config</span> <span class="flag">[--json]</span>
 <span class="cmd">plshelp</span> <span class="arg">remove</span> <span class="arg">&lt;library&gt;</span> <span class="flag">[--json]</span>
 <span class="cmd">plshelp</span> <span class="arg">remove</span> <span class="flag">--all [--json]</span>
-<span class="cmd">plshelp</span> <span class="arg">uninstall</span> <span class="flag">[--all] [--binary] [--data]</span></pre>
+<span class="cmd">plshelp</span> <span class="arg">uninstall</span> <span class="flag">--all | --binary | --data</span></pre>
                 </div>
             </div>
 
